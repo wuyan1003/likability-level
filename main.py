@@ -1,108 +1,167 @@
-import asyncio
+import os
 import json
 import random
-import re
+from typing import Dict, Any
 from pathlib import Path
-from typing import Dict, Set
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api.provider import LLMResponse
 
-# 好感度阶段配置
-FRIENDLY_STAGES = {
-    -30: "极度厌恶",
-    0: "反感",
-    20: "不悦",
-    50: "中立",
-    80: "友好",
-    110: "亲密",
-    150: "挚爱"
-}
-
-class FavorSystem:
+class FavorManager:
+    DATA_PATH = Path("data/FavorSystem") # 数据存储路径
+    
     def __init__(self):
-        self.data_path = Path("data/favor_system")
-        self.data_path.mkdir(parents=True, exist_ok=True)
-        
-        self.favor_data = self._load_data("favor.json")
+        self.DATA_PATH.mkdir(parents=True, exist_ok=True)
+        self.favor_data = self._load_data("favor_data.json")
         self.blacklist = self._load_data("blacklist.json")
-        self.negative_records = self._load_data("negative_records.json")
-        self.lock = asyncio.Lock()
+        self.low_counter = {}  # 记录连续低好感次数
 
-    def _load_data(self, filename: str) -> Dict:
-        try:
-            with open(self.data_path / filename) as f:
-                return json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            return {}
+    def _load_data(self, filename: str) -> Dict[str, Any]:
+        path = self.DATA_PATH / filename
+        if path.exists():
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except json.JSONDecodeError:
+                return {}
+        return {}
 
     def _save_data(self, data: Dict, filename: str):
-        with open(self.data_path / filename, 'w') as f:
-            json.dump(data, f, indent=2)
+        with open(self.DATA_PATH / filename, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
 
-    async def update_favor(self, user_id: str, change: str):
-        async with self.lock:
-            current = self.favor_data.get(user_id, 50)  # 默认中立
-            if change == "上升":
-                current += random.randint(1, 5)
-            elif change == "下降":
-                current -= random.randint(5, 10)
-            
-            # 边界控制
-            current = max(-30, min(current, 150))
-            self.favor_data[user_id] = current
-            
-            # 记录负面次数
-            if change == "下降":
-                self.negative_records[user_id] = self.negative_records.get(user_id, 0) + 1
-                if self.negative_records[user_id] >= 3:  # 连续3次负面
-                    self.blacklist[user_id] = True
-            else:
-                self.negative_records[user_id] = 0
-            
-            self._save_data(self.favor_data, "favor.json")
-            self._save_data(self.blacklist, "blacklist.json")
-            self._save_data(self.negative_records, "negative_records.json")
+    def update_favor(self, user_id: str, change: str):
+        """更新好感度"""
+        self.favor_data = self._load_data("favor_data.json")
+        self.blacklist = self._load_data("blacklist.json")
+        
+        current = self.favor_data.get(user_id, 0)
+        
+        if "[好感度上升]" in change:
+            delta = random.randint(1, 5)
+            current += delta
+        elif "[好感度下降]" in change:
+            delta = random.randint(5, 10)
+            current -= delta
+            self.low_counter[user_id] = self.low_counter.get(user_id, 0) + 1
+        else:
+            return
 
-    def get_stage(self, favor: int) -> str:
-        for threshold in sorted(FRIENDLY_STAGES.keys(), reverse=True):
-            if favor >= threshold:
-                return FRIENDLY_STAGES[threshold]
-        return "未知状态"
+        # 限制好感度范围
+        current = max(-30, min(150, current))
+        self.favor_data[user_id] = current
+        self._save_data(self.favor_data, "favor_data.json")
 
-@register("FavorSystem", "作者", "好感度管理系统", "1.0.0")
+        # 自动黑名单逻辑
+        if current <= -20 and self.low_counter.get(user_id, 0) >= 3:    # 这里可以更改多少次低好感度加入黑名单，以及多少算低，好感默认3次
+            current_blacklist = self._load_data("blacklist.json")
+            if str(user_id) not in current_blacklist:
+                current_blacklist[str(user_id)] = True
+                self._save_data(current_blacklist, "blacklist.json")
+            self.blacklist = current_blacklist  # 同步内存数据
+
+    def get_favor_level(self, value: int) -> str:
+        """获取好感度阶段"""
+        if value <= -21: return "极度厌恶"
+        elif -20 <= value <= -11: return "反感"
+        elif -10 <= value <= -1: return "不悦"
+        elif 0 <= value <= 49: return "中立"
+        elif 50 <= value <= 99: return "友好"
+        elif 100 <= value <= 149: return "亲密"
+        else: return "挚爱"
+
+@register("FavorSystem", "wuyan1003", "好感度管理", "0.1.3")
 class FavorPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
-        self.system = FavorSystem()
+        self.manager = FavorManager()
         
         # 注册LLM响应钩子
         @filter.on_llm_response()
-        async def handle_llm_response(self, event: AstrMessageEvent, resp: LLMResponse):
-            if event.get_sender_id() in self.system.blacklist:
+        async def on_llm_resp(self, event: AstrMessageEvent, resp: LLMResponse):
+            user_id = event.get_sender_id()
+            # 实时检查黑名单
+            current_blacklist = self.manager._load_data("blacklist.json")
+            if user_id in current_blacklist:
                 event.stop_event()
                 return
+            
+            self.manager.update_favor(user_id, resp.completion_text)
 
-            # 解析好感度标记
-            if match := re.search(r'\[好感度(上升|下降)\]', resp.completion_text):
-                user_id = event.get_sender_id()
-                await self.system.update_favor(user_id, match.group(1))
+    @filter.command("好感度")
+    async def query_favor(self, event: AstrMessageEvent):
+        """查询自己的好感度"""
+        user_id = event.get_sender_id()
+        current_blacklist = self.manager._load_data("blacklist.json")
+        if user_id in current_blacklist:
+            yield event.plain_result("你已被列入黑名单")
+            return
+        
+        self.manager.favor_data = self.manager._load_data("favor_data.json")
+        favor = self.manager.favor_data.get(user_id, 0)
+        level = self.manager.get_favor_level(favor)
+        yield event.plain_result(f"当前好感度：{favor} ({level})")
 
-        # 注册指令
-        @filter.command("好感度")
-        async def query_favor(self, event: AstrMessageEvent):
-            user_id = event.get_sender_id()
-            favor = self.system.favor_data.get(user_id, 50)
-            stage = self.system.get_stage(favor)
-            yield event.plain_result(
-                f"当前好感度：{favor}\n"
-                f"关系阶段：{stage}"
-            )
+    @filter.command("admin")
+    async def admin_control(self, event: AstrMessageEvent, cmd: str, target: str = None, value: int = None):
+        """管理员指令"""
+        if event.get_sender_id() != "114514":          # 替换为管理员ID
+            yield event.plain_result("⚠️ 你没有权限执行此操作")
+            event.stop_event()
+            return
 
-        @filter.command("黑名单", permission=filter.PermissionType.ADMIN)
-        async def show_blacklist(self, event: AstrMessageEvent):
-            blacklist = "\n".join(self.system.blacklist.keys())
-            yield event.plain_result(f"黑名单用户：\n{blacklist or '暂无'}")
+        # 类型统一处理
+        target = str(target).strip() if target else None
+
+        # 强制加载最新数据
+        self.manager.favor_data = self.manager._load_data("favor_data.json")
+        self.manager.blacklist = self.manager._load_data("blacklist.json")
+
+        try:
+            if cmd == "list":
+                data = json.dumps(self.manager.favor_data, indent=2, ensure_ascii=False)
+                yield event.plain_result(f"所有用户数据：\n{data}")
+
+            elif cmd == "modify" and target and value is not None:
+                clamped_value = max(-30, min(150, int(value)))
+                self.manager.favor_data[target] = clamped_value
+                self.manager._save_data(self.manager.favor_data, "favor_data.json")
+                self.manager.favor_data = self.manager._load_data("favor_data.json")
+                yield event.plain_result(f"✅ 用户 {target} 好感度已设为 {clamped_value}")
+
+            elif cmd == "add_black" and target:
+                current_blacklist = self.manager._load_data("blacklist.json")
+                if target in current_blacklist:
+                    yield event.plain_result("⚠️ 该用户已在黑名单中")
+                else:
+                    current_blacklist[target] = True
+                    self.manager._save_data(current_blacklist, "blacklist.json")
+                    self.manager.blacklist = current_blacklist
+                    yield event.plain_result(f"⛔ 用户 {target} 已加入黑名单")
+
+            elif cmd == "remove_black" and target:
+                current_blacklist = self.manager._load_data("blacklist.json")
+                if target not in current_blacklist:
+                    yield event.plain_result("⚠️ 该用户不在黑名单中")
+                else:
+                    del current_blacklist[target]
+                    self.manager._save_data(current_blacklist, "blacklist.json")
+                    self.manager.blacklist = current_blacklist
+                    yield event.plain_result(f"✅ 用户 {target} 已移出黑名单")
+
+            else:
+                yield event.plain_result("❌ 无效指令，可用命令：list/add_black/remove_black/modify")
+
+        except ValueError:
+            yield event.plain_result("❌ 数值参数必须为整数")
+        except Exception as e:
+            yield event.plain_result(f"⚠️ 操作失败：{str(e)}")
+        finally:
+            # 最终数据同步
+            self.manager.favor_data = self.manager._load_data("favor_data.json")
+            self.manager.blacklist = self.manager._load_data("blacklist.json")
 
     async def terminate(self):
-        pass
+        """关闭时保存数据"""
+        self.manager._save_data(self.manager.favor_data, "favor_data.json")
+        self.manager._save_data(self.manager.blacklist, "blacklist.json")
