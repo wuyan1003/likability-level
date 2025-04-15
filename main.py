@@ -5,35 +5,42 @@ from typing import Dict, Any
 from pathlib import Path
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
-from astrbot.api.provider import LLMResponse
+from astrbot.api.provider import LLMResponse, ProviderRequest 
 
 class FavorManager:
-    DATA_PATH = Path("data/FavorSystem") # 数据存储路径
-    
+    DATA_PATH = Path("data/FavorSystem")  #文件存储路径
+
     def __init__(self):
         self.DATA_PATH.mkdir(parents=True, exist_ok=True)
+        self._refresh_all_data()
+        self.low_counter = self._load_data("low_counter.json")
+
+    def _refresh_all_data(self):
+        """统一刷新所有内存数据"""
         self.favor_data = self._load_data("favor_data.json")
         self.blacklist = self._load_data("blacklist.json")
-        self.low_counter = {}  # 记录连续低好感次数
+        self.whitelist = self._load_data("whitelist.json")
 
     def _load_data(self, filename: str) -> Dict[str, Any]:
         path = self.DATA_PATH / filename
         if path.exists():
             try:
                 with open(path, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except json.JSONDecodeError:
+                    return {str(k): v for k, v in json.load(f).items()}  
+            except (json.JSONDecodeError, TypeError):
                 return {}
         return {}
 
     def _save_data(self, data: Dict, filename: str):
         with open(self.DATA_PATH / filename, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+            json.dump({str(k): v for k, v in data.items()}, f, ensure_ascii=False, indent=2) 
 
     def update_favor(self, user_id: str, change: str):
         """更新好感度"""
-        self.favor_data = self._load_data("favor_data.json")
-        self.blacklist = self._load_data("blacklist.json")
+        user_id = str(user_id)
+        self._refresh_all_data()
+        if str(user_id) in self.whitelist:   # 检查白名单，在白名单直接跳过好感度加减，建议白名单配合管理员自定义好感度来锁定150好感度[挚爱],避免被ntr，绝对不是我被牛了才想做这个功能的 QwQ
+            return
         
         current = self.favor_data.get(user_id, 0)
         
@@ -44,24 +51,22 @@ class FavorManager:
             delta = random.randint(5, 10)
             current -= delta
             self.low_counter[user_id] = self.low_counter.get(user_id, 0) + 1
+            self._save_data(self.low_counter, "low_counter.json")
         else:
             return
 
-        # 限制好感度范围
-        current = max(-30, min(150, current))
+        current = max(-30, min(149, current))     #限制好感度范围在-30到149之间
         self.favor_data[user_id] = current
         self._save_data(self.favor_data, "favor_data.json")
 
-        # 自动黑名单逻辑
-        if current <= -20 and self.low_counter.get(user_id, 0) >= 3:    # 这里可以更改多少次低好感度加入黑名单，以及多少算低，好感默认3次
+        if current <= -20 and self.low_counter.get(user_id, 0) >= 3:     #如果好感度低于-20并且低于3次，加入黑名单
             current_blacklist = self._load_data("blacklist.json")
             if str(user_id) not in current_blacklist:
                 current_blacklist[str(user_id)] = True
                 self._save_data(current_blacklist, "blacklist.json")
-            self.blacklist = current_blacklist  # 同步内存数据
+            self.blacklist = current_blacklist
 
-    def get_favor_level(self, value: int) -> str:
-        """获取好感度阶段"""
+    def get_favor_level(self, value: int) -> str:                       #根据好感度数值获取好感度等级
         if value <= -21: return "极度厌恶"
         elif -20 <= value <= -11: return "反感"
         elif -10 <= value <= -1: return "不悦"
@@ -76,13 +81,17 @@ class FavorPlugin(Star):
         super().__init__(context)
         self.manager = FavorManager()
         
-        # 注册LLM响应钩子
+        @filter.on_llm_request() 
+        async def add_custom_prompt(self, event: AstrMessageEvent, req: ProviderRequest):
+            """添加LLM提示词"""
+            req.system_prompt += "[系统提示]请根据对话质量在回复末尾添加[好感度持平]，[好感度上升]或[好感度下降]标记。示例：用户：你好！你：你好呀！今天过得怎么样？[好感度上升]"      #让LLM在回复末尾添加好感度标记，插件运行的时候会根据这个标记来判断好感度的变化，但还是建议在人格中主动添加好感度标记，这个提示词的权重没有那么高，LLM可能会忽略掉
+
         @filter.on_llm_response()
         async def on_llm_resp(self, event: AstrMessageEvent, resp: LLMResponse):
-            user_id = event.get_sender_id()
-            # 实时检查黑名单
-            current_blacklist = self.manager._load_data("blacklist.json")
-            if user_id in current_blacklist:
+            user_id = str(event.get_sender_id()) 
+            self.manager._refresh_all_data()
+            
+            if user_id in self.manager.blacklist:
                 event.stop_event()
                 return
             
@@ -90,78 +99,87 @@ class FavorPlugin(Star):
 
     @filter.command("好感度")
     async def query_favor(self, event: AstrMessageEvent):
-        """查询自己的好感度"""
-        user_id = event.get_sender_id()
-        current_blacklist = self.manager._load_data("blacklist.json")
-        if user_id in current_blacklist:
+        user_id = str(event.get_sender_id())
+        self.manager._refresh_all_data()
+        
+        if user_id in self.manager.blacklist:
             yield event.plain_result("你已被列入黑名单")
             return
         
-        self.manager.favor_data = self.manager._load_data("favor_data.json")
         favor = self.manager.favor_data.get(user_id, 0)
         level = self.manager.get_favor_level(favor)
         yield event.plain_result(f"当前好感度：{favor} ({level})")
 
-    @filter.command("admin")
+    @filter.command("管理")
     async def admin_control(self, event: AstrMessageEvent, cmd: str, target: str = None, value: int = None):
-        """管理员指令"""
-        if event.get_sender_id() != "114514":          # 替换为管理员ID
+        if event.get_sender_id() != "214":          #管理员ID，也就是QQ号，支持多名管理员，如："123456789,987654321"
             yield event.plain_result("⚠️ 你没有权限执行此操作")
             event.stop_event()
             return
 
-        # 类型统一处理
         target = str(target).strip() if target else None
-
-        # 强制加载最新数据
-        self.manager.favor_data = self.manager._load_data("favor_data.json")
-        self.manager.blacklist = self.manager._load_data("blacklist.json")
+        self.manager._refresh_all_data()
 
         try:
-            if cmd == "list":
+            if cmd == "列表":
                 data = json.dumps(self.manager.favor_data, indent=2, ensure_ascii=False)
                 yield event.plain_result(f"所有用户数据：\n{data}")
 
-            elif cmd == "modify" and target and value is not None:
-                clamped_value = max(-30, min(150, int(value)))
+            elif cmd == "修改" and target and value is not None:
+                clamped_value = max(-30, min(150, int(value)))      #限制管理员更改的好感度范围在-30到150之间
                 self.manager.favor_data[target] = clamped_value
                 self.manager._save_data(self.manager.favor_data, "favor_data.json")
-                self.manager.favor_data = self.manager._load_data("favor_data.json")
                 yield event.plain_result(f"✅ 用户 {target} 好感度已设为 {clamped_value}")
-
-            elif cmd == "add_black" and target:
+            # 黑名单管理
+            elif cmd == "加入黑名单" and target:
                 current_blacklist = self.manager._load_data("blacklist.json")
                 if target in current_blacklist:
                     yield event.plain_result("⚠️ 该用户已在黑名单中")
                 else:
                     current_blacklist[target] = True
                     self.manager._save_data(current_blacklist, "blacklist.json")
-                    self.manager.blacklist = current_blacklist
                     yield event.plain_result(f"⛔ 用户 {target} 已加入黑名单")
 
-            elif cmd == "remove_black" and target:
+            elif cmd == "移出黑名单" and target:
                 current_blacklist = self.manager._load_data("blacklist.json")
                 if target not in current_blacklist:
                     yield event.plain_result("⚠️ 该用户不在黑名单中")
                 else:
                     del current_blacklist[target]
                     self.manager._save_data(current_blacklist, "blacklist.json")
-                    self.manager.blacklist = current_blacklist
                     yield event.plain_result(f"✅ 用户 {target} 已移出黑名单")
 
+            # 白名单管理
+            elif cmd == "加入白名单" and target:
+                current_whitelist = self.manager._load_data("whitelist.json")
+                if target in current_whitelist:
+                    yield event.plain_result("⚠️ 该用户已在白名单中")
+                else:
+                    current_whitelist[target] = True
+                    self.manager._save_data(current_whitelist, "whitelist.json")
+                    yield event.plain_result(f"✅ 用户 {target} 已加入白名单")
+
+            elif cmd == "移出白名单" and target:
+                current_whitelist = self.manager._load_data("whitelist.json")
+                if target not in current_whitelist:
+                    yield event.plain_result("⚠️ 该用户不在白名单中")
+                else:
+                    del current_whitelist[target]
+                    self.manager._save_data(current_whitelist, "whitelist.json")
+                    yield event.plain_result(f"✅ 用户 {target} 已移出白名单")
+
             else:
-                yield event.plain_result("❌ 无效指令，可用命令：list/add_black/remove_black/modify")
+                yield event.plain_result("❌ 无效指令，可用命令：列表/修改/加入黑名单/移出黑名单/加入白名单/移出白名单")
 
         except ValueError:
             yield event.plain_result("❌ 数值参数必须为整数")
         except Exception as e:
             yield event.plain_result(f"⚠️ 操作失败：{str(e)}")
         finally:
-            # 最终数据同步
-            self.manager.favor_data = self.manager._load_data("favor_data.json")
-            self.manager.blacklist = self.manager._load_data("blacklist.json")
+            self.manager._refresh_all_data()
 
-    async def terminate(self):
-        """关闭时保存数据"""
+async def terminate(self):
         self.manager._save_data(self.manager.favor_data, "favor_data.json")
         self.manager._save_data(self.manager.blacklist, "blacklist.json")
+        self.manager._save_data(self.manager.whitelist, "whitelist.json")
+        self.manager._save_data(self.manager.low_counter, "low_counter.json")
