@@ -1,6 +1,6 @@
 name: favoradmin # 这是你的插件的唯一识别名。
-desc: 给聊天增加一个好感度值，使用前建议先/new和/reset，记得看仓库下面的说明！！！
+desc: 给聊天增加一个好感度值，使用前建议先/new和/reset，记得看仓库下面的说明！！！更新后也看看更新了些啥！！！
 help:  # 插件的帮助信息
-version: v0.2.0
+version: v0.3.0
 author: wuyan1003 # 作者
 repo: https://github.com/wuyan1003/likability-level # 插件的仓库地址
