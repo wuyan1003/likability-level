@@ -6,12 +6,12 @@ from pathlib import Path
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api.provider import LLMResponse, ProviderRequest 
-from astrbot.api import AstrBotConfig
+from astrbot.api import AstrBotConfig 
 
 class FavorManager:
-    DATA_PATH = Path("data/FavorSystem")
+    DATA_PATH = Path("data/FavorSystem")  #文件存储路径
 
-    def __init__(self, config: AstrBotConfig):
+    def __init__(self, config: AstrBotConfig): 
         self.DATA_PATH.mkdir(parents=True, exist_ok=True)
         self.config = config 
         self._refresh_all_data()
@@ -53,7 +53,7 @@ class FavorManager:
         current = self.favor_data.get(user_id, 0)
         
         if "[好感度上升]" in change:
-            delta = random.randint(1, 5)
+            delta = random.randint(1, 5)                    #这边可以更改成你想要的好感度变化范围
             current += delta
         elif "[好感度下降]" in change:
             delta = random.randint(5, 10)
@@ -87,14 +87,15 @@ class FavorManager:
 
 @register("FavorSystem", "wuyan1003", "好感度管理", "0.3.0")
 class FavorPlugin(Star):
-    def __init__(self, context: Context, config: AstrBotConfig):  # 修改：添加config参数
+    def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
-        self.config = config  # 保存配置到实例
-        self.manager = FavorManager(config)  # 传递config给Manager
-
+        self.config = config 
+        self.manager = FavorManager(config) 
+        
         @filter.on_llm_request() 
         async def add_custom_prompt(self, event: AstrMessageEvent, req: ProviderRequest):
-            req.system_prompt += "[系统提示]请根据对话质量在回复末尾添加[好感度持平]，[好感度上升]或[好感度下降]标记。示例：用户：你好！你：你好呀！今天过得怎么样？[好感度上升]"
+            """添加LLM提示词"""
+            req.system_prompt += "[系统提示]请根据对话质量在回复末尾添加[好感度持平]，[好感度上升]或[好感度下降]标记。示例：用户：你好！你：你好呀！今天过得怎么样？[好感度上升]"      #让LLM在回复末尾添加好感度标记，插件运行的时候会根据这个标记来判断好感度的变化，但还是建议在人格中主动添加好感度标记，这个提示词的权重没有那么高，LLM可能会忽略掉
 
         @filter.on_llm_response()
         async def on_llm_resp(self, event: AstrMessageEvent, resp: LLMResponse):
@@ -128,15 +129,15 @@ class FavorPlugin(Star):
             yield event.plain_result("⚠️ 你没有权限执行此操作")
             event.stop_event()
             return
-
+        
         target = str(target).strip() if target else None
         self.manager._refresh_all_data()
 
         try:
             if cmd == "好感度":
                 data = json.dumps(self.manager.favor_data, indent=2, ensure_ascii=False)
-                yield event.plain_result(f"所有用户数据：\n{data}")
-
+                yield event.plain_result(f"好感度用户数据：\n{data}")
+            
             elif cmd == "黑名单":
                 data = json.dumps(self.manager.blacklist, indent=2, ensure_ascii=False)
                 yield event.plain_result(f"黑名单用户：\n{data}")
@@ -204,7 +205,7 @@ class FavorPlugin(Star):
         if isinstance(admins, str):
             return [x.strip() for x in admins.split(",")]
         return [str(x) for x in admins]
-    
+
 async def terminate(self):
         self.manager._save_data(self.manager.favor_data, "favor_data.json")
         self.manager._save_data(self.manager.blacklist, "blacklist.json")
