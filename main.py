@@ -7,6 +7,7 @@ from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api.provider import LLMResponse, ProviderRequest 
 from astrbot.api import AstrBotConfig 
+from astrbot.api import AstrBotConfig 
 
 class FavorManager:
     DATA_PATH = Path("data/FavorSystem")  #文件存储路径
@@ -16,6 +17,12 @@ class FavorManager:
         self.config = config 
         self._refresh_all_data()
         self.low_counter = self._load_data("low_counter.json")
+
+        # 从配置获取参数
+        self.black_threshold = config.get("black_threshold", 3)
+        self.min_favor_value = config.get("min_favor_value", -30)
+        self.max_favor_value = config.get("max_favor_value", 149)
+        self.black_favor_limit = config.get("black_favor_limit", -20)
 
         # 从配置获取参数
         self.black_threshold = config.get("black_threshold", 3)
@@ -65,12 +72,18 @@ class FavorManager:
 
         # 使用配置的上下限
         current = max(self.min_favor_value, min(self.max_favor_value, current))
+        # 使用配置的上下限
+        current = max(self.min_favor_value, min(self.max_favor_value, current))
         self.favor_data[user_id] = current
         self._save_data(self.favor_data, "favor_data.json")
 
         # 使用配置的拉黑条件
         if current <= self.black_favor_limit and self.low_counter.get(user_id, 0) >= self.black_threshold:
+        # 使用配置的拉黑条件
+        if current <= self.black_favor_limit and self.low_counter.get(user_id, 0) >= self.black_threshold:
             current_blacklist = self._load_data("blacklist.json")
+            if user_id not in current_blacklist:
+                current_blacklist[user_id] = True
             if user_id not in current_blacklist:
                 current_blacklist[user_id] = True
                 self._save_data(current_blacklist, "blacklist.json")
@@ -85,6 +98,7 @@ class FavorManager:
         elif 100 <= value <= 149: return "亲密"
         else: return "挚爱"
 
+@register("FavorSystem", "wuyan1003", "好感度管理", "0.2.1")
 @register("FavorSystem", "wuyan1003", "好感度管理", "0.2.1")
 class FavorPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -122,20 +136,34 @@ class FavorPlugin(Star):
         yield event.plain_result(f"当前好感度：{favor} ({level})")
 
     # 使用配置的管理员
+    # 使用配置的管理员
     @filter.command("管理")
     async def admin_control(self, event: AstrMessageEvent, cmd: str, target: str = None, value: int = None):
+        admins = self._parse_admins()
+        if str(event.get_sender_id()) not in admins:
         admins = self._parse_admins()
         if str(event.get_sender_id()) not in admins:
             yield event.plain_result("⚠️ 你没有权限执行此操作")
             event.stop_event()
             return
         
+        
         target = str(target).strip() if target else None
         self.manager._refresh_all_data()
 
         try:
             if cmd == "好感度":
+            if cmd == "好感度":
                 data = json.dumps(self.manager.favor_data, indent=2, ensure_ascii=False)
+                yield event.plain_result(f"好感度用户数据：\n{data}")
+            
+            elif cmd == "黑名单":
+                data = json.dumps(self.manager.blacklist, indent=2, ensure_ascii=False)
+                yield event.plain_result(f"黑名单用户：\n{data}")
+            
+            elif cmd == "白名单":
+                data = json.dumps(self.manager.whitelist, indent=2, ensure_ascii=False)
+                yield event.plain_result(f"白名单用户：\n{data}")
                 yield event.plain_result(f"好感度用户数据：\n{data}")
             
             elif cmd == "黑名单":
@@ -151,6 +179,7 @@ class FavorPlugin(Star):
                 self.manager.favor_data[target] = clamped_value
                 self.manager._save_data(self.manager.favor_data, "favor_data.json")
                 yield event.plain_result(f"✅ 用户 {target} 好感度已设为 {clamped_value}")
+
 
             # 黑名单管理
             elif cmd == "加入黑名单" and target:
@@ -199,6 +228,12 @@ class FavorPlugin(Star):
             yield event.plain_result(f"⚠️ 操作失败：{str(e)}")
         finally:
             self.manager._refresh_all_data()
+
+    def _parse_admins(self):
+        admins = self.config.get("admins_id", [])
+        if isinstance(admins, str):
+            return [x.strip() for x in admins.split(",")]
+        return [str(x) for x in admins]
 
     def _parse_admins(self):
         admins = self.config.get("admins_id", [])
