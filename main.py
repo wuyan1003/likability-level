@@ -55,6 +55,13 @@ class FavorManager:
         if "[好感度上升]" in change:
             delta = random.randint(1, 5)                    #这边可以更改成你想要的好感度变化范围
             current += delta
+        elif"[好感度大幅上升]" in change:
+            delta = random.randint(5, 10)                  
+            current += delta
+        elif "[好感度大幅下降]" in change:
+            delta = random.randint(10, 20)
+            current -= delta
+            self.low_counter[user_id] = self.low_counter.get(user_id, 0) + 1
         elif "[好感度下降]" in change:
             delta = random.randint(5, 10)
             current -= delta
@@ -85,7 +92,7 @@ class FavorManager:
         elif 100 <= value <= 149: return "亲密"
         else: return "挚爱"
 
-@register("FavorSystem", "wuyan1003", "好感度管理", "0.3.0")
+@register("FavorSystem", "wuyan1003", "好感度管理", "0.3.1")
 class FavorPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -95,7 +102,7 @@ class FavorPlugin(Star):
         @filter.on_llm_request() 
         async def add_custom_prompt(self, event: AstrMessageEvent, req: ProviderRequest):
             """添加LLM提示词"""
-            req.system_prompt += "[系统提示]请根据对话质量在回复末尾添加[好感度持平]，[好感度上升]或[好感度下降]标记。示例：用户：你好！你：你好呀！今天过得怎么样？[好感度上升]"      #让LLM在回复末尾添加好感度标记，插件运行的时候会根据这个标记来判断好感度的变化，但还是建议在人格中主动添加好感度标记，这个提示词的权重没有那么高，LLM可能会忽略掉
+            req.system_prompt += "[系统提示]请根据对话质量在回复末尾添加[好感度持平]，[好感度大幅上升]，[好感度大幅下降]，[好感度上升]或[好感度下降]标记。示例：用户：你好！你：你好呀！今天过得怎么样？[好感度上升]"      #让LLM在回复末尾添加好感度标记，插件运行的时候会根据这个标记来判断好感度的变化，但还是建议在人格中主动添加好感度标记，这个提示词的权重没有那么高，LLM可能会忽略掉
 
         @filter.on_llm_response()
         async def on_llm_resp(self, event: AstrMessageEvent, resp: LLMResponse):
