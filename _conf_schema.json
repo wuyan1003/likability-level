@@ -1,0 +1,32 @@
+{
+    "admins_id": {
+        "description": "管理员QQ号列表",
+        "type": "list",
+        "default": ["114514"],
+        "hint": "支持多个管理员，使用逗号分隔或列表格式"
+    },
+    "black_threshold": {
+        "description": "拉黑触发次数",
+        "type": "int",
+        "default": 3,
+        "hint": "达到该次数后自动拉黑"
+    },
+    "black_favor_limit": {
+        "description": "自动拉黑好感度阈值",
+        "type": "int",
+        "default": -20,
+        "hint": "当好感度低于该值时可能触发拉黑"
+    },
+    "min_favor_value": {
+        "description": "最低好感度值",
+        "type": "int",
+        "default": -30,
+        "hint": "好感度下限（包含）"
+    },
+    "max_favor_value": {
+        "description": "最高好感度值",
+        "type": "int",
+        "default": 149,
+        "hint": "好感度上限（包含）"
+    }
+}
