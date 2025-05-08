@@ -28,5 +28,17 @@
         "type": "int",
         "default": 149,
         "hint": "好感度对话增加上限（包含）"
+    },
+    "clean_response": {
+        "description": "是否清理回复中的表情标记和好感度标签",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后会删除符合正则表达的内容"
+    },
+    "clean_patterns": {
+        "description": "需要清理的正则表达式模式",
+        "type": "list",
+        "default": ["【.*?】", "\\[好感度.*?\\]"],
+        "hint": "使用正则表达式匹配要删除的内容"
     }
-}
+} 
