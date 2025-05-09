@@ -40,5 +40,17 @@
         "type": "list",
         "default": ["【.*?】", "\\[好感度.*?\\]"],
         "hint": "使用正则表达式匹配要删除的内容"
+    }, 
+    "auto_blacklist_clean": {
+        "description": "是否启用自动清理被自动拉黑的用户",
+        "type": "bool",
+        "default": true,
+        "hint": "开启后会定期自动移除满足条件的自动拉黑用户"
+    },
+    "auto_blacklist_time": {
+        "description": "自动拉黑用户保留时间（小时）",
+        "type": "int",
+        "default": 24,
+        "hint": "自动拉黑的用户经过该时间后会自动移出黑名单"
     }
-} 
+}
