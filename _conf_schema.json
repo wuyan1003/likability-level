@@ -52,5 +52,23 @@
         "type": "int",
         "default": 24,
         "hint": "自动拉黑的用户经过该时间后会自动移出黑名单"
+    },
+    "session_based_favor": {
+        "description": "是否启用会话独立的好感度系统",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后每个会话的好感度将独立计算，关闭则使用全局好感度"
+    },
+    "session_based_blacklist": {
+        "description": "是否启用会话独立的黑名单系统",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后每个会话的黑名单将独立计算，关闭则使用全局黑名单"
+    },
+    "session_based_counter": {
+        "description": "是否启用会话独立的计数器系统",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后每个会话的计数器将独立计算，关闭则使用全局计数器"
     }
 }

@@ -35,21 +35,33 @@ class FavorManager:
         # 自动移除配置
         self.auto_remove_enabled = config.get("auto_blacklist_clean", True)
         self.auto_remove_hours = config.get("auto_blacklist_time", 24)
+        # 会话独立好感度配置
+        self.session_based_favor = config.get("session_based_favor", False)
+        # 会话独立黑名单配置
+        self.session_based_blacklist = config.get("session_based_blacklist", False)
+        # 会话独立计数器配置
+        self.session_based_counter = config.get("session_based_counter", False)
 
     def _init_data(self):
         """初始化数据"""
         self.favor_data = {}
+        self.session_favor_data = {}  # 新增：会话好感度数据
         self.blacklist = {}
+        self.session_blacklist = {}  # 新增：会话黑名单数据
         self.whitelist = {}
         self.low_counter = {}
+        self.session_low_counter = {}  # 新增：会话计数器数据
         self._load_all_data()
 
     def _load_all_data(self):
         """加载所有数据"""
         self.favor_data = self._load_data("favor_data.json")
+        self.session_favor_data = self._load_data("session_favor_data.json")  # 新增：加载会话好感度数据
         self.blacklist = self._load_data("blacklist.json")
+        self.session_blacklist = self._load_data("session_blacklist.json")  # 新增：加载会话黑名单数据
         self.whitelist = self._load_data("whitelist.json")
         self.low_counter = self._load_data("low_counter.json")
+        self.session_low_counter = self._load_data("session_low_counter.json")  # 新增：加载会话计数器数据
         self._check_auto_removal()
 
     def _refresh_all_data(self):
@@ -80,8 +92,9 @@ class FavorManager:
         current_time = time.time()
         removed_users = []
 
+        # 处理全局黑名单
         for user_id, data in self.blacklist.items():
-            if isinstance(data, dict) and "timestamp" in data:
+            if isinstance(data, dict) and "timestamp" in data and data.get("auto_added", False):
                 add_time = data["timestamp"]
                 if current_time - add_time >= self.auto_remove_hours * 3600:
                     removed_users.append(user_id)
@@ -97,7 +110,105 @@ class FavorManager:
             self._save_data(self.low_counter, "low_counter.json")
             self._save_data(self.favor_data, "favor_data.json")
 
-    def update_favor(self, user_id: str, change: str):
+        # 处理会话黑名单
+        if self.session_based_blacklist:
+            for session_id, session_data in self.session_blacklist.items():
+                removed_users = []
+                for user_id, data in session_data.items():
+                    if isinstance(data, dict) and "timestamp" in data and data.get("auto_added", False):
+                        add_time = data["timestamp"]
+                        if current_time - add_time >= self.auto_remove_hours * 3600:
+                            removed_users.append(user_id)
+                            # 重置用户数据
+                            if session_id in self.session_favor_data and user_id in self.session_favor_data[session_id]:
+                                self.session_favor_data[session_id][user_id] = 0
+                            # 重置会话计数器
+                            if self.session_based_counter and session_id in self.session_low_counter and user_id in self.session_low_counter[session_id]:
+                                del self.session_low_counter[session_id][user_id]
+
+                if removed_users:
+                    for user_id in removed_users:
+                        del session_data[user_id]
+                    self._save_data(self.session_blacklist, "session_blacklist.json")
+                    self._save_data(self.session_favor_data, "session_favor_data.json")
+                    if self.session_based_counter:
+                        self._save_data(self.session_low_counter, "session_low_counter.json")
+
+    def is_blacklisted(self, user_id: str, session_id: str = None) -> bool:
+        """检查用户是否在黑名单中"""
+        user_id = str(user_id)
+        if self.session_based_blacklist and session_id:
+            return user_id in self.session_blacklist.get(session_id, {})
+        return user_id in self.blacklist
+
+    def add_to_blacklist(self, user_id: str, session_id: str = None, auto_added: bool = False):
+        """将用户添加到黑名单"""
+        user_id = str(user_id)
+        if self.session_based_blacklist and session_id:
+            if session_id not in self.session_blacklist:
+                self.session_blacklist[session_id] = {}
+            self.session_blacklist[session_id][user_id] = {
+                "timestamp": time.time(),
+                "auto_added": auto_added
+            }
+            self._save_data(self.session_blacklist, "session_blacklist.json")
+        else:
+            self.blacklist[user_id] = {
+                "timestamp": time.time(),
+                "auto_added": auto_added
+            }
+            self._save_data(self.blacklist, "blacklist.json")
+
+    def remove_from_blacklist(self, user_id: str, session_id: str = None):
+        """将用户从黑名单中移除"""
+        user_id = str(user_id)
+        if self.session_based_blacklist and session_id:
+            if session_id in self.session_blacklist and user_id in self.session_blacklist[session_id]:
+                del self.session_blacklist[session_id][user_id]
+                self._save_data(self.session_blacklist, "session_blacklist.json")
+        else:
+            if user_id in self.blacklist:
+                del self.blacklist[user_id]
+                self._save_data(self.blacklist, "blacklist.json")
+
+    def get_low_counter(self, user_id: str, session_id: str = None) -> int:
+        """获取用户的低好感度计数器值"""
+        user_id = str(user_id)
+        if self.session_based_counter and session_id:
+            return self.session_low_counter.get(session_id, {}).get(user_id, 0)
+        return self.low_counter.get(user_id, 0)
+
+    def increment_low_counter(self, user_id: str, session_id: str = None):
+        """增加用户的低好感度计数器值"""
+        user_id = str(user_id)
+        if self.session_based_counter and session_id:
+            if session_id not in self.session_low_counter:
+                self.session_low_counter[session_id] = {}
+            self.session_low_counter[session_id][user_id] = self.session_low_counter[session_id].get(user_id, 0) + 1
+            self._save_data(self.session_low_counter, "session_low_counter.json")
+        else:
+            self.low_counter[user_id] = self.low_counter.get(user_id, 0) + 1
+            self._save_data(self.low_counter, "low_counter.json")
+
+    def reset_low_counter(self, user_id: str, session_id: str = None):
+        """重置用户的低好感度计数器值"""
+        user_id = str(user_id)
+        if self.session_based_counter and session_id:
+            if session_id in self.session_low_counter and user_id in self.session_low_counter[session_id]:
+                del self.session_low_counter[session_id][user_id]
+                self._save_data(self.session_low_counter, "session_low_counter.json")
+        else:
+            if user_id in self.low_counter:
+                del self.low_counter[user_id]
+                self._save_data(self.low_counter, "low_counter.json")
+
+    def _check_blacklist_condition(self, user_id: str, current: int, session_id: str = None):
+        """检查是否需要加入黑名单"""
+        if current <= self.black_favor_limit and self.get_low_counter(user_id, session_id) >= self.black_threshold:
+            if not self.is_blacklisted(user_id, session_id):
+                self.add_to_blacklist(user_id, session_id, auto_added=True)
+
+    def update_favor(self, user_id: str, change: str, session_id: str = None):
         """更新好感度"""
         user_id = str(user_id)
         self._refresh_all_data()
@@ -105,17 +216,29 @@ class FavorManager:
         if user_id in self.whitelist:
             return
 
-        current = self.favor_data.get(user_id, 0)
-        delta = self._calculate_favor_delta(change)
-        
-        if delta is not None:
-            # 如果是好感度下降，更新计数器
-            if delta < 0:
-                self.low_counter[user_id] = self.low_counter.get(user_id, 0) + 1
-                self._save_data(self.low_counter, "low_counter.json")
+        # 根据配置决定使用哪种好感度数据
+        if self.session_based_favor and session_id:
+            current = self.session_favor_data.get(session_id, {}).get(user_id, 0)
+            delta = self._calculate_favor_delta(change)
             
-            current = self._apply_favor_change(current, delta, user_id)
-            self._check_blacklist_condition(user_id, current)
+            if delta is not None:
+                # 如果是好感度下降，更新计数器
+                if delta < 0:
+                    self.increment_low_counter(user_id, session_id)
+                
+                current = self._apply_favor_change(current, delta, user_id, session_id)
+                self._check_blacklist_condition(user_id, current, session_id)
+        else:
+            current = self.favor_data.get(user_id, 0)
+            delta = self._calculate_favor_delta(change)
+            
+            if delta is not None:
+                # 如果是好感度下降，更新计数器
+                if delta < 0:
+                    self.increment_low_counter(user_id, session_id)
+                
+                current = self._apply_favor_change(current, delta, user_id)
+                self._check_blacklist_condition(user_id, current)
 
     def _calculate_favor_delta(self, change: str) -> Optional[int]:
         """计算好感度变化值"""
@@ -129,23 +252,21 @@ class FavorManager:
             return -random.randint(5, 10)
         return None
 
-    def _apply_favor_change(self, current: int, delta: int, user_id: str) -> int:
+    def _apply_favor_change(self, current: int, delta: int, user_id: str, session_id: str = None) -> int:
         """应用好感度变化"""
         current += delta
         current = max(self.min_favor_value, min(self.max_favor_value, current))
-        self.favor_data[user_id] = current
-        self._save_data(self.favor_data, "favor_data.json")
+        
+        if self.session_based_favor and session_id:
+            if session_id not in self.session_favor_data:
+                self.session_favor_data[session_id] = {}
+            self.session_favor_data[session_id][user_id] = current
+            self._save_data(self.session_favor_data, "session_favor_data.json")
+        else:
+            self.favor_data[user_id] = current
+            self._save_data(self.favor_data, "favor_data.json")
+            
         return current
-
-    def _check_blacklist_condition(self, user_id: str, current: int):
-        """检查是否需要加入黑名单"""
-        if current <= self.black_favor_limit and self.low_counter.get(user_id, 0) >= self.black_threshold:
-            if user_id not in self.blacklist:
-                self.blacklist[user_id] = {
-                    "timestamp": time.time(),
-                    "auto_added": True
-                }
-                self._save_data(self.blacklist, "blacklist.json")
 
     def get_favor_level(self, value: int) -> str:
         """获取好感度等级描述"""
@@ -167,7 +288,16 @@ class FavorManager:
         elif 100 <= value <= 149: return "亲密"
         else: return "挚爱"
 
-@register("FavorSystem", "wuyan1003", "好感度管理", "1.0.0")
+    def get_favor(self, user_id: str, session_id: str = None) -> int:
+        """获取用户好感度"""
+        user_id = str(user_id)
+        self._refresh_all_data()
+        
+        if self.session_based_favor and session_id:
+            return self.session_favor_data.get(session_id, {}).get(user_id, 0)
+        return self.favor_data.get(user_id, 0)
+
+@register("FavorSystem", "wuyan1003", "好感度管理", "1.1.0")
 class FavorPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -184,8 +314,9 @@ class FavorPlugin(Star):
     async def add_relationship_prompt(self, event: AstrMessageEvent, req: ProviderRequest):
         """添加关系提示到系统消息"""
         user_id = str(event.get_sender_id())
+        session_id = event.unified_msg_origin if self.manager.session_based_favor else None
         self.manager._refresh_all_data()
-        favor_value = self.manager.favor_data.get(user_id, 0)
+        favor_value = self.manager.get_favor(user_id, session_id)
         relationship_desc = self.manager.get_favor_level(favor_value)
         req.system_prompt += f"{relationship_desc}"
 
@@ -193,14 +324,15 @@ class FavorPlugin(Star):
     async def on_llm_resp(self, event: AstrMessageEvent, resp: LLMResponse):
         """处理LLM响应"""
         user_id = str(event.get_sender_id())
+        session_id = event.unified_msg_origin if self.manager.session_based_favor else None
         self.manager._refresh_all_data()
 
-        if user_id in self.manager.blacklist:
+        if self.manager.is_blacklisted(user_id, session_id):
             event.stop_event()
             return
 
         original_text = resp.completion_text
-        self.manager.update_favor(user_id, original_text)
+        self.manager.update_favor(user_id, original_text, session_id)
 
         if self.clean_response:
             cleaned_text = original_text
@@ -212,66 +344,89 @@ class FavorPlugin(Star):
     async def query_favor(self, event: AstrMessageEvent):
         """查询好感度"""
         user_id = str(event.get_sender_id())
+        session_id = event.unified_msg_origin if self.manager.session_based_favor else None
         self.manager._refresh_all_data()
 
-        if user_id in self.manager.blacklist:
+        if self.manager.is_blacklisted(user_id, session_id):
             yield event.plain_result("你已被列入黑名单")
             return
 
-        favor = self.manager.favor_data.get(user_id, 0)
+        favor = self.manager.get_favor(user_id, session_id)
         level = self.manager.get_favor_levell(favor)
-        yield event.plain_result(f"当前好感度：{favor} ({level})")
+        counter = self.manager.get_low_counter(user_id, session_id)
+        yield event.plain_result(f"当前好感度：{favor} ({level})\n低好感度计数：{counter}")
 
     @filter.command("管理")
     async def admin_control(self, event: AstrMessageEvent, cmd: str, target: str = None, value: int = None):
         """管理员控制命令"""
-        if not self._check_admin_permission(event):
+        admins = self._parse_admins()
+        if str(event.get_sender_id()) not in admins:
+            yield event.plain_result("⚠️ 你没有权限执行此操作")
+            event.stop_event()
             return
 
         target = str(target).strip() if target else None
+        session_id = event.unified_msg_origin if self.manager.session_based_blacklist else None
         self.manager._refresh_all_data()
 
         try:
             if cmd == "好感度":
                 if target and value is not None:
                     clamped_value = max(-30, min(150, int(value)))
-                    self.manager.favor_data[target] = clamped_value
-                    self.manager._save_data(self.manager.favor_data, "favor_data.json")
+                    if self.manager.session_based_favor:
+                        session_id = event.unified_msg_origin
+                        if session_id not in self.manager.session_favor_data:
+                            self.manager.session_favor_data[session_id] = {}
+                        self.manager.session_favor_data[session_id][target] = clamped_value
+                        self.manager._save_data(self.manager.session_favor_data, "session_favor_data.json")
+                    else:
+                        self.manager.favor_data[target] = clamped_value
+                        self.manager._save_data(self.manager.favor_data, "favor_data.json")
                     yield event.plain_result(f"✅ 用户 {target} 好感度已设为 {clamped_value}")
                 else:
-                    data = json.dumps(self.manager.favor_data, indent=2, ensure_ascii=False)
-                    yield event.plain_result(f"好感度用户数据：\n{data}")
+                    if self.manager.session_based_favor:
+                        session_id = event.unified_msg_origin
+                        data = json.dumps(self.manager.session_favor_data.get(session_id, {}), indent=2, ensure_ascii=False)
+                        yield event.plain_result(f"当前会话好感度用户数据：\n{data}")
+                    else:
+                        data = json.dumps(self.manager.favor_data, indent=2, ensure_ascii=False)
+                        yield event.plain_result(f"好感度用户数据：\n{data}")
             elif cmd == "黑名单":
                 if not target:
-                    data = json.dumps(self.manager.blacklist, indent=2, ensure_ascii=False)
-                    yield event.plain_result(f"黑名单用户：\n{data}")
+                    if self.manager.session_based_blacklist:
+                        session_id = event.unified_msg_origin
+                        data = json.dumps(self.manager.session_blacklist.get(session_id, {}), indent=2, ensure_ascii=False)
+                        yield event.plain_result(f"当前会话黑名单用户：\n{data}")
+                    else:
+                        data = json.dumps(self.manager.blacklist, indent=2, ensure_ascii=False)
+                        yield event.plain_result(f"黑名单用户：\n{data}")
                 else:
-                    current_blacklist = self.manager._load_data("blacklist.json")
-                    if target in current_blacklist:
+                    if self.manager.is_blacklisted(target, session_id):
                         yield event.plain_result("⚠️ 该用户已在黑名单中")
                     else:
-                        current_blacklist[target] = True
-                        self.manager._save_data(current_blacklist, "blacklist.json")
+                        self.manager.add_to_blacklist(target, session_id)
                         yield event.plain_result(f"⛔ 用户 {target} 已加入黑名单")
             elif cmd == "移出黑名单":
                 if not target:
                     yield event.plain_result("⚠️ 请指定要移出黑名单的用户")
                 else:
-                    current_blacklist = self.manager._load_data("blacklist.json")
-                    if target not in current_blacklist:
+                    if not self.manager.is_blacklisted(target, session_id):
                         yield event.plain_result("⚠️ 该用户不在黑名单中")
                     else:
                         # 移除黑名单
-                        del current_blacklist[target]
-                        self.manager._save_data(current_blacklist, "blacklist.json")
+                        self.manager.remove_from_blacklist(target, session_id)
                         
                         # 重置用户数据
-                        if target in self.manager.low_counter:
-                            del self.manager.low_counter[target]
-                            self.manager._save_data(self.manager.low_counter, "low_counter.json")
+                        self.manager.reset_low_counter(target, session_id)
                         
-                        self.manager.favor_data[target] = 0
-                        self.manager._save_data(self.manager.favor_data, "favor_data.json")
+                        if self.manager.session_based_favor:
+                            session_id = event.unified_msg_origin
+                            if session_id in self.manager.session_favor_data and target in self.manager.session_favor_data[session_id]:
+                                self.manager.session_favor_data[session_id][target] = 0
+                                self.manager._save_data(self.manager.session_favor_data, "session_favor_data.json")
+                        else:
+                            self.manager.favor_data[target] = 0
+                            self.manager._save_data(self.manager.favor_data, "favor_data.json")
                         
                         self.manager._refresh_all_data()
                         yield event.plain_result(f"✅ 用户 {target} 已移出黑名单，并重置好感度和计数器")
@@ -305,15 +460,6 @@ class FavorPlugin(Star):
         except Exception as e:
             yield event.plain_result(f"⚠️ 操作失败：{str(e)}")
 
-    def _check_admin_permission(self, event: AstrMessageEvent) -> bool:
-        """检查管理员权限"""
-        admins = self._parse_admins()
-        if str(event.get_sender_id()) not in admins:
-            event.plain_result("⚠️ 你没有权限执行此操作")
-            event.stop_event()
-            return False
-        return True
-
     def _parse_admins(self) -> List[str]:
         """解析管理员列表"""
         admins = self.config.get("admins_id", [])
@@ -324,6 +470,9 @@ class FavorPlugin(Star):
     async def terminate(self):
         """插件终止时保存数据"""
         self.manager._save_data(self.manager.favor_data, "favor_data.json")
+        self.manager._save_data(self.manager.session_favor_data, "session_favor_data.json")
         self.manager._save_data(self.manager.blacklist, "blacklist.json")
+        self.manager._save_data(self.manager.session_blacklist, "session_blacklist.json")
         self.manager._save_data(self.manager.whitelist, "whitelist.json")
         self.manager._save_data(self.manager.low_counter, "low_counter.json")
+        self.manager._save_data(self.manager.session_low_counter, "session_low_counter.json")
