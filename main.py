@@ -222,8 +222,8 @@ class FavorManager:
             delta = self._calculate_favor_delta(change)
             
             if delta is not None:
-                # 如果是好感度下降，更新计数器
-                if delta < 0:
+                # 如果是好感度下降，且当前好感度已经达到或低于阈值，更新计数器
+                if delta < 0 and current <= self.black_favor_limit:
                     self.increment_low_counter(user_id, session_id)
                 
                 current = self._apply_favor_change(current, delta, user_id, session_id)
@@ -233,8 +233,8 @@ class FavorManager:
             delta = self._calculate_favor_delta(change)
             
             if delta is not None:
-                # 如果是好感度下降，更新计数器
-                if delta < 0:
+                # 如果是好感度下降，且当前好感度已经达到或低于阈值，更新计数器
+                if delta < 0 and current <= self.black_favor_limit:
                     self.increment_low_counter(user_id, session_id)
                 
                 current = self._apply_favor_change(current, delta, user_id)
@@ -297,7 +297,7 @@ class FavorManager:
             return self.session_favor_data.get(session_id, {}).get(user_id, 0)
         return self.favor_data.get(user_id, 0)
 
-@register("FavorSystem", "wuyan1003", "好感度管理", "1.1.0")
+@register("FavorSystem", "wuyan1003", "好感度管理", "1.1.5")
 class FavorPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
