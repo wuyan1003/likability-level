@@ -341,7 +341,7 @@ class FavorManager:
                     self._save_data(self.session_low_counter, "session_low_counter.json")
                     self._save_data(self.last_decrease_time, "last_decrease_time.json")
 
-@register("FavorSystem", "wuyan1003", "好感度管理", "1.1.5")
+@register("FavorSystem", "wuyan1003", "好感度管理", "1.2.0")
 class FavorPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
