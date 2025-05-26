@@ -41,6 +41,10 @@ class FavorManager:
         self.session_based_blacklist = config.get("session_based_blacklist", False)
         # 会话独立计数器配置
         self.session_based_counter = config.get("session_based_counter", False)
+        # 低好感计数器自动减少配置
+        self.auto_decrease_enabled = config.get("auto_decrease_counter", True)
+        self.auto_decrease_hours = config.get("auto_decrease_counter_hours", 24)
+        self.auto_decrease_amount = config.get("auto_decrease_counter_amount", 1)
 
     def _init_data(self):
         """初始化数据"""
@@ -51,6 +55,7 @@ class FavorManager:
         self.whitelist = {}
         self.low_counter = {}
         self.session_low_counter = {}  # 新增：会话计数器数据
+        self.last_decrease_time = {}  # 新增：记录上次减少时间
         self._load_all_data()
 
     def _load_all_data(self):
@@ -62,7 +67,9 @@ class FavorManager:
         self.whitelist = self._load_data("whitelist.json")
         self.low_counter = self._load_data("low_counter.json")
         self.session_low_counter = self._load_data("session_low_counter.json")  # 新增：加载会话计数器数据
+        self.last_decrease_time = self._load_data("last_decrease_time.json")  # 新增：加载上次减少时间
         self._check_auto_removal()
+        self._check_auto_decrease()  # 新增：检查并减少低好感计数器
 
     def _refresh_all_data(self):
         """刷新所有数据"""
@@ -222,22 +229,20 @@ class FavorManager:
             delta = self._calculate_favor_delta(change)
             
             if delta is not None:
+                current = self._apply_favor_change(current, delta, user_id, session_id)
                 # 如果是好感度下降，且当前好感度已经达到或低于阈值，更新计数器
                 if delta < 0 and current <= self.black_favor_limit:
                     self.increment_low_counter(user_id, session_id)
-                
-                current = self._apply_favor_change(current, delta, user_id, session_id)
                 self._check_blacklist_condition(user_id, current, session_id)
         else:
             current = self.favor_data.get(user_id, 0)
             delta = self._calculate_favor_delta(change)
             
             if delta is not None:
+                current = self._apply_favor_change(current, delta, user_id)
                 # 如果是好感度下降，且当前好感度已经达到或低于阈值，更新计数器
                 if delta < 0 and current <= self.black_favor_limit:
                     self.increment_low_counter(user_id, session_id)
-                
-                current = self._apply_favor_change(current, delta, user_id)
                 self._check_blacklist_condition(user_id, current)
 
     def _calculate_favor_delta(self, change: str) -> Optional[int]:
@@ -297,6 +302,45 @@ class FavorManager:
             return self.session_favor_data.get(session_id, {}).get(user_id, 0)
         return self.favor_data.get(user_id, 0)
 
+    def _check_auto_decrease(self):
+        """检查并处理需要自动减少的低好感计数器"""
+        if not self.auto_decrease_enabled:
+            return
+
+        current_time = time.time()
+        decreased_users = []
+
+        # 处理全局计数器
+        for user_id, count in self.low_counter.items():
+            if count > 0:
+                # 检查是否达到减少时间间隔
+                last_time = self.last_decrease_time.get(user_id, 0)
+                if current_time - last_time >= self.auto_decrease_hours * 3600:
+                    decreased_users.append(user_id)
+                    self.low_counter[user_id] = max(0, count - self.auto_decrease_amount)
+                    self.last_decrease_time[user_id] = current_time
+
+        if decreased_users:
+            self._save_data(self.low_counter, "low_counter.json")
+            self._save_data(self.last_decrease_time, "last_decrease_time.json")
+
+        # 处理会话计数器
+        if self.session_based_counter:
+            for session_id, session_data in self.session_low_counter.items():
+                decreased_users = []
+                for user_id, count in session_data.items():
+                    if count > 0:
+                        # 检查是否达到减少时间间隔
+                        last_time = self.last_decrease_time.get(f"{session_id}_{user_id}", 0)
+                        if current_time - last_time >= self.auto_decrease_hours * 3600:
+                            decreased_users.append(user_id)
+                            session_data[user_id] = max(0, count - self.auto_decrease_amount)
+                            self.last_decrease_time[f"{session_id}_{user_id}"] = current_time
+
+                if decreased_users:
+                    self._save_data(self.session_low_counter, "session_low_counter.json")
+                    self._save_data(self.last_decrease_time, "last_decrease_time.json")
+
 @register("FavorSystem", "wuyan1003", "好感度管理", "1.1.5")
 class FavorPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -316,6 +360,12 @@ class FavorPlugin(Star):
         user_id = str(event.get_sender_id())
         session_id = event.unified_msg_origin if self.manager.session_based_favor else None
         self.manager._refresh_all_data()
+        
+        # 检查用户是否在黑名单中
+        if self.manager.is_blacklisted(user_id, session_id):
+            event.stop_event()
+            return
+            
         favor_value = self.manager.get_favor(user_id, session_id)
         relationship_desc = self.manager.get_favor_level(favor_value)
         req.system_prompt += f"{relationship_desc}"
@@ -326,10 +376,6 @@ class FavorPlugin(Star):
         user_id = str(event.get_sender_id())
         session_id = event.unified_msg_origin if self.manager.session_based_favor else None
         self.manager._refresh_all_data()
-
-        if self.manager.is_blacklisted(user_id, session_id):
-            event.stop_event()
-            return
 
         original_text = resp.completion_text
         self.manager.update_favor(user_id, original_text, session_id)
@@ -453,8 +499,32 @@ class FavorPlugin(Star):
                         del current_whitelist[target]
                         self.manager._save_data(current_whitelist, "whitelist.json")
                         yield event.plain_result(f"✅ 用户 {target} 已移出白名单")
+            elif cmd == "计数器":
+                if not target:
+                    yield event.plain_result(f"当前计数器设置：\n自动减少：{'开启' if self.manager.auto_decrease_enabled else '关闭'}\n减少间隔：{self.manager.auto_decrease_hours}小时\n减少数量：{self.manager.auto_decrease_amount}")
+                else:
+                    if target == "开启":
+                        self.manager.auto_decrease_enabled = True
+                        yield event.plain_result("✅ 已开启计数器自动减少功能")
+                    elif target == "关闭":
+                        self.manager.auto_decrease_enabled = False
+                        yield event.plain_result("✅ 已关闭计数器自动减少功能")
+                    elif target == "间隔" and value is not None:
+                        if value <= 0:
+                            yield event.plain_result("⚠️ 间隔时间必须大于0")
+                        else:
+                            self.manager.auto_decrease_hours = value
+                            yield event.plain_result(f"✅ 已设置计数器减少间隔为 {value} 小时")
+                    elif target == "数量" and value is not None:
+                        if value <= 0:
+                            yield event.plain_result("⚠️ 减少数量必须大于0")
+                        else:
+                            self.manager.auto_decrease_amount = value
+                            yield event.plain_result(f"✅ 已设置计数器每次减少数量为 {value}")
+                    else:
+                        yield event.plain_result("❌ 无效的参数，可用参数：开启/关闭/间隔/数量")
             else:
-                yield event.plain_result("❌ 无效指令，可用命令：列表/修改/加入黑名单/移出黑名单/加入白名单/移出白名单")
+                yield event.plain_result("❌ 无效指令，可用命令：好感度/黑名单/移出黑名单/白名单/移出白名单/计数器")
         except ValueError:
             yield event.plain_result("❌ 数值参数必须为整数")
         except Exception as e:
@@ -476,3 +546,4 @@ class FavorPlugin(Star):
         self.manager._save_data(self.manager.whitelist, "whitelist.json")
         self.manager._save_data(self.manager.low_counter, "low_counter.json")
         self.manager._save_data(self.manager.session_low_counter, "session_low_counter.json")
+        self.manager._save_data(self.manager.last_decrease_time, "last_decrease_time.json")  # 新增：保存上次减少时间

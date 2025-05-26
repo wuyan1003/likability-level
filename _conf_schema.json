@@ -70,5 +70,23 @@
         "type": "bool",
         "default": false,
         "hint": "开启后每个会话的计数器将独立计算，关闭则使用全局计数器"
+    },
+    "auto_decrease_counter": {
+        "description": "是否启用低好感计数器自动减少功能",
+        "type": "bool",
+        "default": true,
+        "hint": "开启后低好感计数器会定期自动减少"
+    },
+    "auto_decrease_counter_hours": {
+        "description": "低好感计数器减少间隔（小时）",
+        "type": "int",
+        "default": 24,
+        "hint": "每隔多少小时自动减少一次低好感计数器"
+    },
+    "auto_decrease_counter_amount": {
+        "description": "低好感计数器每次减少数量",
+        "type": "int",
+        "default": 1,
+        "hint": "每次自动减少时减少的计数器数值"
     }
 }
